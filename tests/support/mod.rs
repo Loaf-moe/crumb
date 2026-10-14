@@ -209,3 +209,43 @@ pub fn event(event_id: &str, tokens: &[&str]) -> String {
         devices.join(",")
     )
 }
+
+/// Everything crumb logs on this thread while the guard lives. Tests using
+/// it run on tokio's default current-thread runtime, so every task logs
+/// here.
+pub struct Logs {
+    buffer: Arc<Mutex<Vec<u8>>>,
+    _guard: tracing::subscriber::DefaultGuard,
+}
+
+impl Logs {
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.buffer.lock().unwrap()).into_owned()
+    }
+}
+
+pub fn capture_logs() -> Logs {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter("crumb=debug")
+        .with_writer(move || BufferWriter(writer.clone()))
+        .finish();
+    Logs {
+        buffer,
+        _guard: tracing::subscriber::set_default(subscriber),
+    }
+}
+
+struct BufferWriter(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for BufferWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}

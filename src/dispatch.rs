@@ -83,14 +83,16 @@ impl Gateway {
         }
     }
 
+    /// `app_id` comes from an unauthenticated caller, so it is logged with
+    /// `?`: Debug escapes newlines that would otherwise forge log lines.
     async fn deliver(&self, push: &Push, requests: &Requests<'_>, device: &Device) -> Outcome {
         let pk = Pk(&device.pushkey);
         let Some(client) = self.apps.get(&device.app_id) else {
-            info!(%pk, app_id = %device.app_id, "unknown app_id, rejected");
+            info!(%pk, app_id = ?device.app_id, "unknown app_id, rejected");
             return Outcome::Rejected;
         };
         let Ok(token) = DeviceToken::try_from(device.pushkey.as_str()) else {
-            info!(%pk, app_id = %device.app_id, "pushkey is not a device token, rejected");
+            info!(%pk, app_id = ?device.app_id, "pushkey is not a device token, rejected");
             return Outcome::Rejected;
         };
         let event_id = push.event_id();
@@ -107,7 +109,7 @@ impl Gateway {
         {
             self.dedupe.insert(event_id, token, Instant::now());
         }
-        info!(%pk, app_id = %device.app_id, ?outcome, "push");
+        info!(%pk, app_id = ?device.app_id, ?outcome, "push");
         outcome
     }
 }

@@ -331,3 +331,17 @@ async fn a_request_naming_too_many_devices_is_refused_before_any_push() {
     );
     assert!(apns.seen().is_empty());
 }
+
+#[tokio::test]
+async fn a_hostile_app_id_cannot_forge_a_log_line() {
+    let logs = support::capture_logs();
+    let apns = FakeApns::start().await;
+    let app = gateway(&apns, DEADLINE);
+    let body = r#"{"notification":{"event_id":"$e","devices":[
+        {"app_id":"x\nFORGED INFO crumb: all good","pushkey":"aa"}]}}"#;
+    notify(&app, body).await;
+
+    let text = logs.text();
+    assert!(text.contains("unknown app_id"), "{text}");
+    assert!(!text.lines().any(|l| l.starts_with("FORGED")), "{text}");
+}
