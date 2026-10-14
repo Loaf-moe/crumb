@@ -29,15 +29,19 @@ not in the spec is listed under "Beyond the spec" with its reason.
 | Server | `axum` on `hyper` |
 | APNs client | Hand-rolled on `hyper-util` + `hyper-rustls` (ring, webpki roots), HTTP/2 only. `a2` was rejected: no release since 2024-05 and OpenSSL by default |
 | JWT | Hand-rolled ES256 with `p256`. No JWT crate |
+| Types | Validated newtypes and `From`/`TryFrom` conversions: a value that exists is valid (see "Types") |
 | Deploy | Podman container behind Traefik. Traefik terminates TLS; crumb speaks plain HTTP |
 | Config | Keyed by `app_id`, like Sygnal |
 | Observability | `GET /health` and structured `tracing` logs on stdout. No metrics |
 | Delivery model | Synchronous, with no queue. The `200` response must name rejected pushkeys, so crumb waits for APNs. Retrying is the homeserver's job (the spec says it SHOULD retry HTTP errors with exponential backoff) |
 
-**Dependencies** (complete list): `tokio`, `axum`, `hyper`, `hyper-util`,
-`hyper-rustls`, `serde`, `serde_json`, `toml`, `p256`, `base64`, `sha2`,
-`tracing`, `tracing-subscriber`. Dev-only: none beyond these; the fake APNs
-uses `hyper`'s server.
+**Dependencies** (complete list): `tokio`, `axum` (no default features),
+`hyper`, `hyper-util`, `hyper-rustls` (ring, webpki roots, no OpenSSL or
+aws-lc), `http`, `http-body-util`, `bytes`, `futures-util` (`join_all` only),
+`serde`, `serde_json`, `toml`, `p256`, `base64`, `sha2`, `tracing`,
+`tracing-subscriber`. `http`, `futures-util` and `bytes` were already in the
+tree through axum and hyper. Dev-only: `hyper`'s server feature, for the fake
+APNs, and `tower`'s `util` feature, to drive the router in tests.
 
 ## Configuration
 
@@ -68,15 +72,48 @@ Each module has one job and can be tested on its own.
 
 | Module | Job | Depends on |
 |---|---|---|
-| `config` | Load and validate the TOML; load each `.p8` into a `p256::SigningKey` | `toml`, `p256` |
-| `matrix` | Serde types for the notify request and response; the Matrix error body | `serde` |
-| `payload` | Pure function: a notification + device → APNs headers and JSON body | `matrix` |
-| `jwt` | Holds one provider token per app. Issues a cached token, renews it after 40 minutes, and renews on demand after `ExpiredProviderToken`. The clock is injected | `p256`, `base64` |
-| `apns` | One client per app over a persistent, multiplexed HTTP/2 connection. `send(device_token, request) -> Outcome` | `hyper*`, `jwt` |
-| `dedupe` | Remembers delivered `(event_id, pushkey)` pairs for 15 minutes | — |
-| `dispatch` | For one notify request: fans out to devices, applies dedupe, merges the outcomes into a response | `apns`, `payload`, `dedupe` |
-| `server` | axum routes, the error mapping and the fallback | `dispatch` |
-| `log` | `pk=<8 hex>`: the first 8 hex characters of SHA-256(pushkey) | `sha2` |
+| `config` | Load and validate the TOML; load each `.p8` into a `p256::SigningKey`; the Apple identifier newtypes | `toml`, `p256` |
+| `notification` | The domain notification, built from the wire shape during deserialisation | `serde` |
+| `matrix` | The notify request and response; the Matrix error body | `notification` |
+| `token` | `DeviceToken`: a pushkey proven to be even-length hex | — |
+| `payload` | Each device's APNs request; each distinct body serialised once | `notification` |
+| `jwt` | One provider token per app: cached, renewed after 40 minutes or on demand. The clock is injected | `p256`, `base64` |
+| `apns` | One client per app over a persistent, multiplexed HTTP/2 connection. `send(DeviceToken, &ApnsRequest) -> Outcome` | `hyper*`, `jwt` |
+| `dedupe` | Remembers which devices each event reached, for 15 minutes | `token` |
+| `dispatch` | One notify request: fan out, dedupe, merge the outcomes | `apns`, `payload`, `dedupe` |
+| `server` | axum routes and the `M_UNRECOGNIZED` fallbacks | `dispatch` |
+| `log` | `Pk`: displays the first 8 hex characters of SHA-256(pushkey) | `sha2` |
+
+## Types
+
+Invalid states can't be represented, and each type builds itself from its
+input:
+
+- **`Notification`** deserialises through `#[serde(from = "RawNotification")]`
+  into `{ push, priority, badge, devices }`.
+  - **`push`** is `Push::Event(Event { event_id, room_id, alert })` or
+    `Push::Counts`, so a counts-only update cannot carry an alert.
+  - **`Alert`** is computed and truncated once, at that point.
+  - **`Badge`** is `From<Counts>`. `Counts` defaults missing values to zero.
+  - **`Priority`** is `High | Low`. Any other `prio` is `M_BAD_JSON`, since
+    the spec defines only those two.
+  - **Each `Device`'s `tweaks`** deserialise straight to `Sound::Silent | Default`.
+- **Content keys** (`body`, `membership`) of an unexpected type count as
+  absent, not as a malformed request.
+- **`pushkey_ts` and `data`** have no effect on a gateway and are skipped by
+  serde.
+- **Validated newtypes:**
+  - `KeyId` and `TeamId`: 10 uppercase letters or digits.
+  - `Topic`: a bundle id, stored as its header value.
+  - `CollapseId`: at most 64 header-safe bytes.
+  - `DeviceToken`: even-length hex, borrowed.
+- **Header conversions:** `From<Priority> for HeaderValue`,
+  `From<Endpoint> for Origin`, `From<(StatusCode, Option<Reason>)> for
+  Verdict`, `From<Verdict> for Outcome`, `From<AppConfig> for ApnsClient`.
+- **The bearer header** is cached as a sensitive `HeaderValue`. Each push
+  clones it, which is a reference-count bump.
+- **The fan-out spawns nothing:** `join_all` borrows the notification inside
+  the request's task.
 
 ## Request handling (spec coverage)
 
@@ -168,7 +205,9 @@ Devices are sent concurrently over the app's shared connection.
     - **Body for `m.room.member`** with `content.membership == "invite"` and
       `user_is_target == true`: `<sender_display_name or sender> invited you`.
     - **Any other case**, including `m.room.encrypted`: `new message`.
-  - Bodies are truncated so the payload stays within APNs's 4 KB limit.
+  - The title is cut to 200 bytes and the body to 2000, on a char boundary
+    with an ellipsis. With Matrix's 255-byte maximum ids that keeps the
+    payload within APNs's 4 KB limit.
 
 **Counts-only update** (no `event_id`):
 
@@ -202,11 +241,11 @@ for event notifications).
 ### Duplicate suppression
 
 - The spec requires dedupe on `event_id` for event notifications.
-  `dedupe` is an in-memory map from `(event_id, pushkey)` to the time it was
-  delivered.
+  `dedupe` is an in-memory map from `event_id` to its first delivery time
+  and the pushkeys it reached. A lookup allocates nothing.
 - Entries expire after 15 minutes. That's longer than a sensible homeserver
   backoff window, so retries are covered.
-- The map is capped at 100,000 entries, evicting the oldest first, and is
+- The map is capped at 100,000 events, evicting the oldest first, and is
   pruned as a side effect of inserts.
 - A restart clears it. The only consequence is that a retry spanning a
   restart may push once more, and the collapse id still replaces the banner.
@@ -233,7 +272,8 @@ for event notifications).
   SHA-256(pushkey)>` with its `app_id` and outcome; the APNs status, `reason`
   and `apns-id`; JWT renewals; connection errors.
 - **Never logged:** raw pushkeys, JWTs, key material, `content`, or any
-  display field (names, aliases, bodies).
+  display field (names, aliases, bodies). The bearer `HeaderValue` is marked
+  sensitive.
 - The `.p8` path is logged at startup. The key's contents are never logged.
 
 ## Testing
@@ -279,9 +319,12 @@ deployment are in place, run with Chris.
 
 ## Deployment (crumb's side)
 
-- **`Containerfile`:** a multi-stage build that produces a static
-  `x86_64-unknown-linux-musl` binary on a `scratch` base, plus CA roots,
-  exposing 8080.
+- **`Containerfile`:** a multi-stage build. A `rust:1.96.1-bookworm` stage
+  builds the release binary (fat LTO, one codegen unit, stripped), which
+  runs on `gcr.io/distroless/cc-debian12:nonroot` and exposes 8080.
+  - glibc, not musl: musl's allocator is slow under a multi-threaded server,
+    and fixing that would mean adding an allocator crate.
+  - No CA bundle is needed: `webpki-roots` compiles the roots in.
 - **The README documents:**
   - `CRUMB_CONFIG`, the config format, and mounting the `.p8` read-only.
   - `/health` for Podman/Traefik health checks.
