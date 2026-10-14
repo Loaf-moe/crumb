@@ -1,0 +1,32 @@
+# Every pull request and every push to main: formatting, clippy and the
+# tests, on one Linux runner. The real-time test (`mise run test:slow`) is
+# left out; it takes three minutes and guards one pool setting.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A newer push to a pull request makes the older run moot; every commit
+  # on main gets its own answer.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # Rust, with clippy and rustfmt, at the version mise.toml pins.
+      - uses: jdx/mise-action@v2
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run check
+      # Tests still run when check fails, so one push reports both.
+      - if: ${{ !cancelled() }}
+        run: mise run test
