@@ -2,6 +2,7 @@
 //!
 //! Spec: <https://spec.matrix.org/latest/push-gateway-api/>.
 
+pub mod apns;
 pub mod config;
 pub mod dedupe;
 pub mod jwt;
