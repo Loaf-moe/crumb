@@ -320,9 +320,9 @@ deployment are in place, run with Chris.
 
 ## Deployment (crumb's side)
 
-- **`Containerfile`:** a multi-stage build. A `rust:1.96.1-bookworm` stage
+- **`Containerfile`:** a multi-stage build. A `rust:1.96.1-trixie` stage
   builds the release binary (fat LTO, one codegen unit, stripped), which
-  runs on `gcr.io/distroless/cc-debian12:nonroot` and exposes 8080.
+  runs on `gcr.io/distroless/cc-debian13:nonroot` and exposes 8080.
   - glibc, not musl: musl's allocator is slow under a multi-threaded server,
     and fixing that would mean adding an allocator crate.
   - No CA bundle is needed: `webpki-roots` compiles the roots in.
