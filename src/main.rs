@@ -43,7 +43,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .apps
         .into_iter()
         .map(|(app_id, app)| {
-            info!(%app_id, endpoint = ?app.endpoint, "serving app");
+            info!(
+                %app_id,
+                endpoint = ?app.endpoint,
+                key = %app.key_path.display(),
+                "serving app"
+            );
             (app_id, ApnsClient::from(app))
         })
         .collect();

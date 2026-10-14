@@ -21,6 +21,8 @@ pub struct Config {
 
 pub struct AppConfig {
     pub key: SigningKey,
+    /// Where the key was read from: logged at startup, never its contents.
+    pub key_path: PathBuf,
     pub key_id: KeyId,
     pub team_id: TeamId,
     pub topic: Topic,
@@ -53,6 +55,7 @@ impl Config {
                 })?;
                 let app = AppConfig {
                     key,
+                    key_path: app.key_path,
                     key_id: app.key_id,
                     team_id: app.team_id,
                     topic: app.topic,
@@ -332,6 +335,10 @@ endpoint = "production"
         assert_eq!(HeaderValue::from(app.topic.clone()), "moe.loaf.chat.ios");
         assert_eq!(app.endpoint, Endpoint::Production);
         assert_eq!(app.key, SigningKey::from_slice(&[7; 32]).unwrap());
+        assert_eq!(
+            app.key_path, key.0,
+            "kept so startup can log where the key came from"
+        );
     }
 
     #[test]
