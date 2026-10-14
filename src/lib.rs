@@ -5,4 +5,5 @@
 pub mod log;
 pub mod matrix;
 pub mod notification;
+pub mod payload;
 pub mod token;
