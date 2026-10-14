@@ -3,4 +3,5 @@
 //! Spec: <https://spec.matrix.org/latest/push-gateway-api/>.
 
 pub mod log;
+pub mod notification;
 pub mod token;
