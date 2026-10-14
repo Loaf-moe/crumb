@@ -269,9 +269,10 @@ for event notifications).
 
 ## Logging and secrets
 
-- **Logged:** each request's device count; each device as `pk=<8 hex of
-  SHA-256(pushkey)>` with its `app_id` and outcome; the APNs status, `reason`
-  and `apns-id`; JWT renewals; connection errors.
+- **Logged:** each device as `pk=<8 hex of SHA-256(pushkey)>` with its
+  `app_id` and outcome; the APNs status, `reason`, `apns-id` and verdict of
+  every refusal; connection errors with their full cause; the device count of
+  a request that missed the deadline; startup and shutdown.
 - **Never logged:** raw pushkeys, JWTs, key material, `content`, or any
   display field (names, aliases, bodies). The bearer `HeaderValue` is marked
   sensitive.
