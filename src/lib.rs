@@ -5,9 +5,11 @@
 pub mod apns;
 pub mod config;
 pub mod dedupe;
+pub mod dispatch;
 pub mod jwt;
 pub mod log;
 pub mod matrix;
 pub mod notification;
 pub mod payload;
+pub mod server;
 pub mod token;
