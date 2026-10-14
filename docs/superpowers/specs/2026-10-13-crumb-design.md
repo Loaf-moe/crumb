@@ -165,7 +165,7 @@ Devices are sent concurrently over the app's shared connection.
 | `apns-push-type` | `alert` |
 | `apns-priority` | `10` for `prio: high` or absent; `5` for `prio: low` |
 | `apns-expiration` | now + 24 hours (Unix seconds) |
-| `apns-collapse-id` | the `event_id`, when present and at most 64 bytes |
+| `apns-collapse-id` | the `event_id`, when present, at most 64 bytes, and all visible ASCII |
 
 **Event notification** (`event_id` present):
 
@@ -226,6 +226,7 @@ for event notifications).
 | `200` | Delivered. Record `(event_id, pushkey)` in dedupe if there's an `event_id` |
 | `410` (any reason), `400 BadDeviceToken`, `400 DeviceTokenNotForTopic` | Rejected |
 | `403 ExpiredProviderToken` or `InvalidProviderToken` | Renew the JWT and retry once. A second failure is Transient |
+| The stream is refused (HTTP/2 `REFUSED_STREAM`) | Resend, up to 3 times. RFC 9113 guarantees a refused stream was never processed, so this can't notify twice. This happens when a new connection's first burst outruns APNs's stream limit before its SETTINGS arrive. After that, Transient |
 | Anything else: other 4xx/5xx, `429`, connection error, the deadline | Transient |
 
 ### The response
