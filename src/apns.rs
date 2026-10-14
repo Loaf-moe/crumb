@@ -129,6 +129,10 @@ impl ApnsClient {
         let http = Client::builder(TokioExecutor::new())
             .timer(TokioTimer::new())
             .http2_only(true)
+            // APNs wants one long-lived connection. The pool's default
+            // reaps it after 90 s idle, and keep-alive pings don't count
+            // as use, so a quiet spell would cost a fresh handshake.
+            .pool_idle_timeout(None)
             .http2_keep_alive_interval(KEEP_ALIVE)
             .http2_keep_alive_while_idle(true)
             .build(connector);

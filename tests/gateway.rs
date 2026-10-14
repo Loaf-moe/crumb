@@ -275,3 +275,18 @@ async fn an_event_id_unfit_for_a_header_is_sent_without_a_collapse_id() {
     assert!(seen[0].headers.get("apns-collapse-id").is_none());
     assert_eq!(seen[0].body["event_id"], "$évènement");
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_idle_connection_outlives_the_pool_idle_timeout() {
+    let apns = FakeApns::start().await;
+    let app = gateway(&apns, DEADLINE);
+    let (status, _) = notify(&app, &event("$a", &["ae01"])).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // hyper-util's pool reaps idle connections after 90 s by default.
+    tokio::time::sleep(Duration::from_secs(200)).await;
+
+    let (status, _) = notify(&app, &event("$b", &["ae01"])).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(apns.connections(), 1, "the connection must persist while idle");
+}

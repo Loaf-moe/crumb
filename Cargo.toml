@@ -29,6 +29,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 
 [dev-dependencies]
 hyper = { version = "1.12.0", features = ["server"] }
+tokio = { version = "1.53.3", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
 
 [profile.release]
