@@ -38,9 +38,10 @@ not in the spec is listed under "Beyond the spec" with its reason.
 **Dependencies** (complete list): `tokio`, `axum` (no default features),
 `hyper`, `hyper-util`, `hyper-rustls` (ring, webpki roots, no OpenSSL or
 aws-lc), `http`, `http-body-util`, `bytes`, `futures-util` (`join_all` only),
+`h2` (only to recognise `REFUSED_STREAM` in an error chain),
 `serde`, `serde_json`, `toml`, `p256`, `base64`, `sha2`, `tracing`,
-`tracing-subscriber`. `http`, `futures-util` and `bytes` were already in the
-tree through axum and hyper. Dev-only: `hyper`'s server feature, for the fake
+`tracing-subscriber`. `http`, `futures-util`, `bytes` and `h2` were already
+in the tree through axum and hyper. Dev-only: `hyper`'s server feature, for the fake
 APNs, and `tower`'s `util` feature, to drive the router in tests.
 
 ## Configuration
@@ -135,6 +136,11 @@ The endpoint needs no authentication and has no rate limit, as the spec says.
   (`400 M_BAD_JSON` otherwise). The spec defines only `200` for this
   endpoint. The `400` follows the general Matrix error convention, and a
   homeserver that retries it does no harm.
+- At most 100 devices per request (`400 M_BAD_JSON` beyond that), and a
+  device named twice (same `app_id` and `pushkey`) is pushed once.
+  Homeservers send one device per request; the cap stops one public request
+  from fanning out into thousands of pushes that crowd everyone else off the
+  connection. A cap per request is not a rate limit.
 - Every other field the spec defines is parsed: `event_id`, `room_id`,
   `type`, `sender`, `sender_display_name`, `room_name`, `room_alias`,
   `user_is_target`, `prio`, `content`, `counts.unread`, `counts.missed_calls`,
@@ -205,9 +211,10 @@ Devices are sent concurrently over the app's shared connection.
     - **Body for `m.room.member`** with `content.membership == "invite"` and
       `user_is_target == true`: `<sender_display_name or sender> invited you`.
     - **Any other case**, including `m.room.encrypted`: `new message`.
-  - The title is cut to 200 bytes and the body to 2000, on a char boundary
-    with an ellipsis. With Matrix's 255-byte maximum ids that keeps the
-    payload within APNs's 4 KB limit.
+  - The title is cut to 200 bytes and the body to 2000, counted after JSON
+    escaping, on a char boundary with an ellipsis. With Matrix's 255-byte
+    maximum ids that keeps the payload within APNs's 4 KB limit even for
+    text made of quotes or control characters.
 
 **Counts-only update** (no `event_id`):
 
@@ -227,6 +234,7 @@ for event notifications).
 | `410` (any reason), `400 BadDeviceToken`, `400 DeviceTokenNotForTopic` | Rejected |
 | `403 ExpiredProviderToken` or `InvalidProviderToken` | Renew the JWT and retry once. A second failure is Transient |
 | The stream is refused (HTTP/2 `REFUSED_STREAM`) | Resend, up to 3 times. RFC 9113 guarantees a refused stream was never processed, so this can't notify twice. This happens when a new connection's first burst outruns APNs's stream limit before its SETTINGS arrive. After that, Transient |
+| `413` (payload too large) | Dropped: settled without a retry, since a retry can't shrink it, and not rejected, since the token is fine. With the caps above it shouldn't happen |
 | Anything else: other 4xx/5xx, `429`, connection error, the deadline | Transient |
 
 ### The response
@@ -255,9 +263,10 @@ for event notifications).
 
 - **One HTTP/2 connection per app.** It's built with `hyper-util`'s pooled
   client, HTTP/2 only, with ALPN `h2` over rustls. Concurrent requests share
-  it as streams. HTTP/2 keep-alive pings run every 60 seconds so idle
-  connections are noticed, and a dropped connection is reopened on the next
-  request.
+  it as streams. The pool never reaps it for being idle (hyper-util's
+  default would after 90 s). HTTP/2 keep-alive pings run every 60 seconds so
+  a dead connection is noticed, and a dropped connection is reopened on the
+  next request.
 - **The JWT** has header `{"alg":"ES256","kid":<key_id>}` and claims
   `{"iss":<team_id>,"iat":<now>}`. The signature is the raw 64-byte `r||s`.
   - The token is reused until it is 40 minutes old, which is inside Apple's
