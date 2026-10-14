@@ -1,0 +1,14 @@
+# Where crumb listens. Traefik terminates TLS in front of it.
+listen = "0.0.0.0:8080"
+
+# One table per pusher app_id. A pusher whose app_id isn't here is rejected.
+[apps."moe.loaf.chat.ios"]
+# The APNs auth key (.p8) from developer.apple.com → Keys. Mount it
+# read-only; crumb never logs its contents.
+key_path = "/run/secrets/apns.p8"
+key_id = "ABCDE12345"
+team_id = "6W2A5N37N3"
+topic = "moe.loaf.chat.ios"
+# "production" for App Store and TestFlight builds, "sandbox" for builds
+# signed for development.
+endpoint = "production"
