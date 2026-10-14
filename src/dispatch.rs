@@ -71,7 +71,7 @@ impl Gateway {
         let mut retry = false;
         for (device, outcome) in devices.into_iter().zip(outcomes) {
             match outcome {
-                Outcome::Delivered => {}
+                Outcome::Delivered | Outcome::Dropped => {}
                 Outcome::Rejected => rejected.push(device.pushkey),
                 Outcome::Transient => retry = true,
             }

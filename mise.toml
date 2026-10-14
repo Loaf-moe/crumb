@@ -5,6 +5,10 @@ rust = { version = "1.96.1", components = "clippy,rustfmt" }
 description = "Every test"
 run = "cargo test --locked"
 
+[tasks."test:slow"]
+description = "The real-time tests left out of `test` (about three minutes)"
+run = "cargo test --locked -- --ignored"
+
 [tasks.check]
 description = "Fail on unformatted code or any clippy warning"
 run = [

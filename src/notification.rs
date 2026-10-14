@@ -1,7 +1,10 @@
 //! The notification as crumb understands it. The wire shape is turned into
 //! these types during deserialisation, so the rest of crumb never sees a
 //! half-valid notification: a counts-only update cannot carry an alert, a
-//! missing count is already zero, and the alert text is already truncated.
+//! missing count is already zero, the alert text is already truncated, and
+//! the device list is bounded and free of duplicates.
+
+use std::fmt;
 
 use serde::de::{Deserializer, IgnoredAny};
 use serde::{Deserialize, Serialize};
@@ -11,13 +14,19 @@ use serde::{Deserialize, Serialize};
 const FALLBACK_TITLE: &str = "Loaf Chat";
 const FALLBACK_BODY: &str = "new message";
 
-/// Caps that keep the payload under APNs's 4096-byte limit even with the
-/// Matrix maximum of 255-byte room and event ids, each sent more than once.
+/// Caps, in bytes after JSON escaping, that keep the payload under APNs's
+/// 4096-byte limit even with the Matrix maximum of 255-byte room and event
+/// ids, each sent more than once.
 const MAX_TITLE: usize = 200;
 const MAX_BODY: usize = 2000;
 
+/// The most devices one request may name. Homeservers send one device per
+/// request; the cap stops a single public request from fanning out into
+/// thousands of pushes that would crowd everyone else off the connection.
+pub const MAX_DEVICES: usize = 100;
+
 #[derive(Debug, Deserialize)]
-#[serde(from = "RawNotification")]
+#[serde(try_from = "RawNotification")]
 pub struct Notification {
     pub push: Push,
     pub priority: Priority,
@@ -169,8 +178,23 @@ fn string_or_none<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::
     })
 }
 
-impl From<RawNotification> for Notification {
-    fn from(raw: RawNotification) -> Self {
+/// A notification naming more than [`MAX_DEVICES`] devices.
+#[derive(Debug)]
+pub struct TooManyDevices;
+
+impl fmt::Display for TooManyDevices {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "notification names more than {MAX_DEVICES} devices")
+    }
+}
+
+impl TryFrom<RawNotification> for Notification {
+    type Error = TooManyDevices;
+
+    fn try_from(raw: RawNotification) -> Result<Self, Self::Error> {
+        if raw.devices.len() > MAX_DEVICES {
+            return Err(TooManyDevices);
+        }
         let push = match raw.event_id {
             None => Push::Counts,
             Some(event_id) => {
@@ -186,13 +210,29 @@ impl From<RawNotification> for Notification {
                 })
             }
         };
-        Notification {
+        Ok(Notification {
             push,
             priority: raw.prio,
             badge: raw.counts.into(),
-            devices: raw.devices,
+            devices: unique(raw.devices),
+        })
+    }
+}
+
+/// Keeps the first of each `(app_id, pushkey)`, in order, so a device named
+/// twice is pushed once. With at most [`MAX_DEVICES`] a scan costs less than
+/// hashing would.
+fn unique(devices: Vec<Device>) -> Vec<Device> {
+    let mut kept: Vec<Device> = Vec::with_capacity(devices.len());
+    for device in devices {
+        let seen = kept
+            .iter()
+            .any(|k| k.app_id == device.app_id && k.pushkey == device.pushkey);
+        if !seen {
+            kept.push(device);
         }
     }
+    kept
 }
 
 /// The event kinds whose alert text crumb can say something useful about.
@@ -240,18 +280,35 @@ impl Alert {
     }
 }
 
-/// Cuts `s` in place to at most `max` bytes on a char boundary, ending
-/// with an ellipsis.
+/// Cuts `s` in place so it takes at most `max` bytes once JSON-escaped,
+/// on a char boundary, ending with an ellipsis. Counting escaped bytes is
+/// what makes the payload limit hold for text full of quotes or control
+/// characters.
 fn truncated(mut s: String, max: usize) -> String {
-    if s.len() > max {
-        let mut end = max - '…'.len_utf8();
-        while !s.is_char_boundary(end) {
-            end -= 1;
+    let budget = max - '…'.len_utf8();
+    let mut used = 0;
+    let mut keep = 0;
+    for (i, c) in s.char_indices() {
+        used += escaped_len(c);
+        if used <= budget {
+            keep = i + c.len_utf8();
         }
-        s.truncate(end);
-        s.push('…');
+        if used > max {
+            s.truncate(keep);
+            s.push('…');
+            return s;
+        }
     }
     s
+}
+
+/// The bytes `c` takes in serde_json's output.
+fn escaped_len(c: char) -> usize {
+    match c {
+        '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+        '\0'..='\u{1f}' => 6,
+        c => c.len_utf8(),
+    }
 }
 
 #[cfg(test)]
@@ -352,6 +409,44 @@ mod tests {
         }
     }
 
+    fn devices(n: usize) -> String {
+        let list: Vec<String> = (0..n)
+            .map(|i| format!(r#"{{"app_id":"a","pushkey":"{i:04x}"}}"#))
+            .collect();
+        format!(r#"{{"devices":[{}]}}"#, list.join(","))
+    }
+
+    #[test]
+    fn at_most_max_devices_are_accepted() {
+        assert_eq!(parse(&devices(MAX_DEVICES)).devices.len(), MAX_DEVICES);
+        let e = serde_json::from_str::<Notification>(&devices(MAX_DEVICES + 1)).unwrap_err();
+        assert!(e.to_string().contains("more than 100 devices"), "{e}");
+    }
+
+    #[test]
+    fn a_device_named_twice_is_kept_once() {
+        let n = parse(
+            r#"{"devices":[
+                {"app_id":"a","pushkey":"00"},
+                {"app_id":"a","pushkey":"01"},
+                {"app_id":"a","pushkey":"00","tweaks":{"sound":"x"}},
+                {"app_id":"b","pushkey":"00"}]}"#,
+        );
+        let keys: Vec<(&str, &str, Sound)> = n
+            .devices
+            .iter()
+            .map(|d| (d.app_id.as_str(), d.pushkey.as_str(), d.sound))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("a", "00", Sound::Silent),
+                ("a", "01", Sound::Silent),
+                ("b", "00", Sound::Silent)
+            ]
+        );
+    }
+
     #[test]
     fn titles_and_bodies_follow_the_display_fields() {
         let cases = [
@@ -438,5 +533,21 @@ mod tests {
     fn short_text_is_untouched() {
         assert_eq!(truncated("hi".into(), 10), "hi");
         assert_eq!(truncated("x".repeat(10), 10), "x".repeat(10));
+        // Five quotes escape to exactly ten bytes: still untouched.
+        assert_eq!(truncated("\"".repeat(5), 10), "\"".repeat(5));
+    }
+
+    #[test]
+    fn limits_count_bytes_after_json_escaping() {
+        let escaped = |s: &str| serde_json::to_string(s).unwrap().len() - 2;
+        for raw in [
+            "\"".repeat(MAX_BODY),
+            "\u{1}".repeat(MAX_BODY),
+            "a\\\n".repeat(MAX_BODY),
+        ] {
+            let cut = truncated(raw, MAX_BODY);
+            assert!(escaped(&cut) <= MAX_BODY, "{} escaped bytes", escaped(&cut));
+            assert!(cut.ends_with('…'));
+        }
     }
 }

@@ -47,6 +47,8 @@ pub enum Outcome {
     Rejected,
     /// Worth retrying later.
     Transient,
+    /// Undeliverable as sent, but the token is fine: retrying can't help.
+    Dropped,
 }
 
 /// APNs's answer to one request, before crumb decides what to do about it.
@@ -57,6 +59,8 @@ pub enum Verdict {
     /// The provider token is stale: renew it and send once more.
     RenewToken,
     Transient,
+    /// APNs refused the payload itself (`413`).
+    Dropped,
 }
 
 /// The `reason` APNs gives with an error. Only the reasons crumb acts on are
@@ -76,6 +80,7 @@ impl From<(StatusCode, Option<Reason>)> for Verdict {
     fn from((status, reason): (StatusCode, Option<Reason>)) -> Self {
         match (status, reason) {
             (StatusCode::OK, _) => Verdict::Delivered,
+            (StatusCode::PAYLOAD_TOO_LARGE, _) => Verdict::Dropped,
             (StatusCode::GONE, _)
             | (
                 StatusCode::BAD_REQUEST,
@@ -97,6 +102,7 @@ impl From<Verdict> for Outcome {
             Verdict::Delivered => Outcome::Delivered,
             Verdict::Rejected => Outcome::Rejected,
             Verdict::RenewToken | Verdict::Transient => Outcome::Transient,
+            Verdict::Dropped => Outcome::Dropped,
         }
     }
 }
@@ -302,10 +308,11 @@ mod tests {
             (403, Some(ExpiredProviderToken), Verdict::RenewToken),
             (403, Some(InvalidProviderToken), Verdict::RenewToken),
             (403, Some(Other), Verdict::Transient),
-            (413, Some(Other), Verdict::Transient),
             (429, Some(Other), Verdict::Transient),
             (500, None, Verdict::Transient),
             (503, Some(Other), Verdict::Transient),
+            (413, Some(Other), Verdict::Dropped),
+            (413, None, Verdict::Dropped),
         ];
         for (status, reason, verdict) in cases {
             let status = StatusCode::from_u16(status).unwrap();
@@ -329,5 +336,10 @@ mod tests {
     #[test]
     fn a_stale_token_after_renewal_is_transient() {
         assert_eq!(Outcome::from(Verdict::RenewToken), Outcome::Transient);
+    }
+
+    #[test]
+    fn a_payload_apns_refuses_as_too_large_is_dropped_not_retried() {
+        assert_eq!(Outcome::from(Verdict::Dropped), Outcome::Dropped);
     }
 }

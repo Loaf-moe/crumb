@@ -276,17 +276,58 @@ async fn an_event_id_unfit_for_a_header_is_sent_without_a_collapse_id() {
     assert_eq!(seen[0].body["event_id"], "$évènement");
 }
 
-#[tokio::test(start_paused = true)]
+/// Real time on purpose: paused tokio time auto-advances while the runtime
+/// waits on real sockets, firing the deadline and ping timers mid-request.
+#[tokio::test]
+#[ignore = "takes about three minutes; run with `mise run test:slow`"]
 async fn an_idle_connection_outlives_the_pool_idle_timeout() {
     let apns = FakeApns::start().await;
     let app = gateway(&apns, DEADLINE);
     let (status, _) = notify(&app, &event("$a", &["ae01"])).await;
     assert_eq!(status, StatusCode::OK);
 
-    // hyper-util's pool reaps idle connections after 90 s by default.
-    tokio::time::sleep(Duration::from_secs(200)).await;
+    // hyper-util's pool reaper ticks every 90 s and evicts what has idled
+    // longer than that, so an unfixed client loses the connection by 180 s.
+    tokio::time::sleep(Duration::from_secs(185)).await;
 
     let (status, _) = notify(&app, &event("$b", &["ae01"])).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(apns.connections(), 1, "the connection must persist while idle");
+    assert_eq!(
+        apns.connections(),
+        1,
+        "the connection must persist while idle"
+    );
+}
+
+#[tokio::test]
+async fn a_payload_apns_calls_too_large_settles_instead_of_looping() {
+    let apns = FakeApns::start().await;
+    apns.script("af01", [Reply::Error(413, "PayloadTooLarge")]);
+    let app = gateway(&apns, DEADLINE);
+    let (status, body) = notify(&app, &event("$ev", &["af01"])).await;
+    // Retrying can't shrink the payload, and the pushkey is still good.
+    assert_eq!((status, body), (StatusCode::OK, json!({ "rejected": [] })));
+}
+
+#[tokio::test]
+async fn a_device_named_twice_in_one_request_is_pushed_once() {
+    let apns = FakeApns::start().await;
+    let app = gateway(&apns, DEADLINE);
+    let (status, _) = notify(&app, &event("$ev", &["ba01", "ba01"])).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(apns.seen_for("ba01").len(), 1);
+}
+
+#[tokio::test]
+async fn a_request_naming_too_many_devices_is_refused_before_any_push() {
+    let apns = FakeApns::start().await;
+    let app = gateway(&apns, DEADLINE);
+    let tokens: Vec<String> = (0..101).map(|i| format!("{i:04x}")).collect();
+    let refs: Vec<&str> = tokens.iter().map(String::as_str).collect();
+    let (status, body) = notify(&app, &event("$ev", &refs)).await;
+    assert_eq!(
+        (status, &body["errcode"]),
+        (StatusCode::BAD_REQUEST, &json!("M_BAD_JSON"))
+    );
+    assert!(apns.seen().is_empty());
 }

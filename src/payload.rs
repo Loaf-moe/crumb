@@ -297,4 +297,18 @@ mod tests {
         let r = Requests::from(&n).for_device(Sound::Default);
         assert!(r.body.len() <= 4096, "{} bytes", r.body.len());
     }
+
+    #[test]
+    fn the_largest_payload_fits_even_when_every_char_needs_escaping() {
+        let id = "x".repeat(254);
+        let n = notification(&format!(
+            r#"{{"event_id":"${id}","room_id":"!{id}","type":"m.room.message",
+                "room_name":"{}","sender":"@{id}","content":{{"body":"{}"}},
+                "counts":{{"unread":18446744073709551615}},{DEVICE}}}"#,
+            "\\\"".repeat(300),
+            "\\u0001\\n".repeat(2000),
+        ));
+        let r = Requests::from(&n).for_device(Sound::Default);
+        assert!(r.body.len() <= 4096, "{} bytes", r.body.len());
+    }
 }
