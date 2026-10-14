@@ -3,6 +3,7 @@
 //! Spec: <https://spec.matrix.org/latest/push-gateway-api/>.
 
 pub mod config;
+pub mod dedupe;
 pub mod jwt;
 pub mod log;
 pub mod matrix;
