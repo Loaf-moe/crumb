@@ -75,3 +75,7 @@ mise run check
 ```
 
 The tests run against a fake APNs: an in-process HTTP/2 server.
+
+## Licence
+
+AGPL-3.0-only. See `LICENSE`.

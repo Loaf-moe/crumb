@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 description = "A Matrix push gateway for Loaf Chat: Push Gateway API in, APNs out"
-license = "MIT"
+license = "AGPL-3.0-only"
 publish = false
 
 [dependencies]
