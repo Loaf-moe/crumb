@@ -2,6 +2,7 @@
 //!
 //! Spec: <https://spec.matrix.org/latest/push-gateway-api/>.
 
+pub mod config;
 pub mod log;
 pub mod matrix;
 pub mod notification;
