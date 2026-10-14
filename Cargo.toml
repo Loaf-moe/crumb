@@ -1,0 +1,37 @@
+[package]
+name = "crumb"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "A Matrix push gateway for Loaf Chat: Push Gateway API in, APNs out"
+license = "MIT"
+publish = false
+
+[dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+base64 = "0.23.1"
+bytes = "1.12.1"
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+h2 = { version = "0.4.20", default-features = false }
+http = "1.5.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["client", "http2"] }
+hyper-rustls = { version = "0.27.10", default-features = false, features = ["http2", "ring", "tls12", "webpki-roots"] }
+hyper-util = { version = "0.1.21", features = ["client-legacy", "http2", "tokio"] }
+p256 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+tokio = { version = "1.53.3", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+toml = { version = "1.1.8", default-features = false, features = ["parse", "serde", "std"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
+
+[dev-dependencies]
+hyper = { version = "1.12.0", features = ["server"] }
+tower = { version = "0.5.3", features = ["util"] }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+strip = true
