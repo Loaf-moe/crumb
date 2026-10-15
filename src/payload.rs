@@ -37,10 +37,11 @@ impl TryFrom<&str> for CollapseId {
     type Error = NoCollapseId;
 
     /// Visible ASCII only: HTTP tolerates other bytes in a header, but APNs
-    /// promises nothing about them. Real event ids are all ASCII.
+    /// promises nothing about them. Real event ids are all ASCII. An empty
+    /// header is refused outright, with a reason crumb treats as transient.
     fn try_from(event_id: &str) -> Result<Self, Self::Error> {
-        let fits =
-            event_id.len() <= MAX_COLLAPSE_ID && event_id.bytes().all(|b| b.is_ascii_graphic());
+        let fits = (1..=MAX_COLLAPSE_ID).contains(&event_id.len())
+            && event_id.bytes().all(|b| b.is_ascii_graphic());
         if !fits {
             return Err(NoCollapseId);
         }
@@ -270,10 +271,10 @@ mod tests {
     }
 
     #[test]
-    fn collapse_id_needs_at_most_64_visible_ascii_bytes() {
+    fn collapse_id_needs_1_to_64_visible_ascii_bytes() {
         assert!(CollapseId::try_from("$".repeat(64).as_str()).is_ok());
         assert!(CollapseId::try_from("$".repeat(65).as_str()).is_err());
-        for unfit in ["$a\nb", "$a b", "$évènement"] {
+        for unfit in ["", "$a\nb", "$a b", "$évènement"] {
             assert!(CollapseId::try_from(unfit).is_err(), "{unfit:?}");
         }
     }

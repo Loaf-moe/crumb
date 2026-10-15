@@ -212,6 +212,7 @@ impl ApnsClient {
             pk = %Pk(token.as_str()),
             status = status.as_u16(),
             ?reason,
+            reason_text = reason_text(&body).as_deref(),
             apns_id = ?apns_id,
             ?verdict,
             "APNs refused a push"
@@ -223,6 +224,16 @@ impl ApnsClient {
 #[derive(Deserialize)]
 struct ErrorBody {
     reason: Reason,
+}
+
+/// APNs's `reason` as sent, since [`Reason::Other`] alone can't say which
+/// reason it stood for.
+fn reason_text(body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Raw {
+        reason: String,
+    }
+    serde_json::from_slice::<Raw>(body).ok().map(|r| r.reason)
 }
 
 /// `apns-expiration`, as Unix seconds.
@@ -331,6 +342,13 @@ mod tests {
         let body: ErrorBody =
             serde_json::from_str(r#"{"reason":"Unregistered","timestamp":1}"#).unwrap();
         assert_eq!(body.reason, Reason::Unregistered);
+    }
+
+    #[test]
+    fn an_unknown_reason_keeps_its_text_for_the_log() {
+        let text = reason_text(br#"{"reason":"BadCollapseId"}"#);
+        assert_eq!(text.as_deref(), Some("BadCollapseId"));
+        assert_eq!(reason_text(b"not json"), None);
     }
 
     #[test]
